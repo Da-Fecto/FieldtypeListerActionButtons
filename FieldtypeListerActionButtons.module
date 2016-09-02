@@ -1,0 +1,229 @@
+<?php
+
+/**
+ * ProcessWire Fieldtype that adds the ability to add action buttons to ProcessLister tables.
+ *
+ * @author Martijn Geerts (Calago.nl)
+ *
+ * ProcessWire 2.x
+ * Copyright (C) 2015 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://processwire.com
+ *
+ */
+
+class FieldtypeListerActionButtons extends Fieldtype {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Lister Action Buttons',
+			'version' => '0.0.1',
+			'summary' => __("Add custom buttons to ProcessLister table rows."),
+			'author' => 'Martijn Geerts',
+			);
+	}
+
+	public function __construct() {
+		$this->set('buttons', 'Edit Page, /processwire/page/edit/?id={id}&modal=1, fa-edit, just-a-class, another-class, pw-modal-large');
+		$this->set('style', 'padding: 0.1em 0.4em;');
+		$this->set('resfresh', '');
+	}
+
+	public function init() {
+		$script = $this->wire('config')->urls->get($this->className()) . $this->className() . '.js';
+		$this->wire('config')->scripts->add($script);
+	}
+
+	/**
+	 * Return the fields required to configure an instance of FieldtypeText
+	 *
+	 */
+	public function ___getConfigInputfields(Field $field) {
+		$inputfields = parent::___getConfigInputfields($field);
+
+		$input = $this->wire('modules')->get('InputfieldTextarea');
+		$input->attr('name', 'buttons');
+		$input->attr('value', $field->buttons ? $field->buttons : $this->buttons);
+		$input->label = $this->_('Configuration of markupValue buttons');
+		$input->description =
+			$this->_("Each button on it's own line.") . "\n" .
+			$this->_("All properties should be sepearated by a comma.") . "\n" .
+			$this->_("First property is the label.") . "\n" .
+			$this->_("The second property is the url of the button. The url get parsed with wirePopulateStringTags and all properties of Page will be parsed.") . "\n" .
+			$this->_("Properties starting with fa- or icon- are considered to be icons.") . "\n" .
+			$this->_("All other properties are considered to be class names.");
+		$input->notes = $this->_('example: Edit Page, /processwire/page/edit/?id={id}?modal=1, fa-edit, just-a-class, another-class');
+		$inputfields->add($input);
+
+		$input = $this->wire('modules')->get('InputfieldText');
+		$input->attr('name', 'style');
+		$input->attr('value', $field->style ? $field->style : $this->style);
+		$input->label = $this->_('Additional button style (CSS)');
+		$inputfields->add($input);
+
+		$value = $field->refresh === 1 ? 1 : 0;
+		$input = $this->wire('modules')->get('InputfieldCheckbox');
+		$input->label = $this->_('Refresh lister after closing modal.');
+		$input->attr('name', 'refresh');
+		$input->attr('value', $value);
+		if ($value)  $input->attr('checked', 'checked');
+		$inputfields->add($input);
+
+		return $inputfields;
+	}
+
+	/**
+	 * Create the populated concat string for the given $field on $page
+	 *
+	 * @return string Non-formatted concat string
+	 *
+	 */
+	protected function makeButton(Page $page, Field $field) {
+		$configUrl = $this->_("The field not yet configured. goto: the <a href='/processwire/setup/field/edit?id=" . $field->id . "#fieldtypeConfig'>field settings</a> and click the detail tab.");
+		$buttons = trim($field->buttons);
+		if (!$buttons) return $configUrl;
+		$lines = explode("\n", $buttons);
+		$markup = '';
+		foreach ($lines as $k => $line) {
+			$parts = explode(",", $line);
+			$label = '';
+			$url = '';
+			$icon = '';
+			$modal = false;
+			$modalClasses = array();
+			$classes = array();
+			foreach ($parts as $key => $part) {
+				$part = trim($part);
+				if ($key === 0) {
+					$label = $part;
+				} else if ($key === 1) {
+					if (strpos($part, '/') !== false) {
+						$url = wirePopulateStringTags($part, $page);
+						$modal = strpos($part, 'modal=1') !== false ? 'pw-modal' : false;
+						if ($modal) $modalClasses[] = 'pw-modal';
+					}
+				} else if (strpos($part, 'fa-') !== false || strpos($part, 'icon-') !== false) {
+					$part = str_replace('fa-', '', $part);
+					$part = str_replace('icon-', '', $part);
+					$icon = $part;
+				} else {
+					$classes[] = trim($part);
+					$modal = strpos($part, 'pw-modal') !== false ? $part : $modal;
+					if ($modal) $modalClasses[] = $modal;
+				}
+			}
+
+			if ($modal !== false && !in_array('pw-modal', $modalClasses)) {
+				$modalClasses[] = 'pw-modal';
+			}
+
+			$button = $this->wire('modules')->get('InputfieldButton');
+
+			if ($modal !== false) {
+				$modalClasses = 'lister-action-button ' . implode (' ', array_unique($modalClasses));
+				$button->set('aclass', $modalClasses);
+			}
+
+			foreach ($classes as $class) $button->addClass($class);
+			if ($field->style) $button->setAttribute('style', $field->style);
+			$button->attr('href', $url);
+			$button->setAttribute('data-refresh', $field->refresh ? 1 : 0);
+			$button->value = $label;
+			$button->icon = $icon;
+			$markup .= $button->render();
+		}
+
+		return $markup;
+	}
+
+	/**
+	 * Render a markup string of the value.
+	 *
+	 *
+	 * @param Page $page Page that $value comes from
+	 * @param Field $field Field that $value comes from
+	 * @param mixed $value Optionally specify the value returned by `$page->getFormatted('field')`.
+	 *		When specified, value must be a formatted value.
+	 *		If null or not specified (recommended), it will be retrieved automatically.
+	 * @param string $property Optionally specify the property or index to render. If omitted, entire value is rendered.
+	 * @return string|MarkupFieldtype Returns a string or object that can be output as a string, ready for output.
+	 * 		Return a MarkupFieldtype value when suitable so that the caller has potential specify additional
+	 * 		config options before typecasting it to a string.
+	 *
+	 */
+	public function ___markupValue(Page $page, Field $field, $value = null, $property = '') {
+		return $this->makeButton($page, $field);
+	}
+
+	/**
+	 * The following functions are defined as replacements to keep this fieldtype out of the DB
+	 *
+	 */
+
+	public function sanitizeValue(Page $page, Field $field, $value) {
+		return $value;
+	}
+
+	public function getInputfield(Page $page, Field $field) {
+		return $this->wire('modules')->get('InputfieldHidden');
+	}
+
+	public function ___wakeupValue(Page $page, Field $field, $value) {
+		return '';
+	}
+
+	public function ___sleepValue(Page $page, Field $field, $value) {
+		return $this->makeButton($page, $field);
+	}
+
+	public function getLoadQuery(Field $field, DatabaseQuerySelect $query) {
+		// prevent loading from DB
+		return $query;
+	}
+
+	public function ___loadPageField(Page $page, Field $field) {
+		// generate value at runtime rather than loading from DB
+		return $this->makeButton($page, $field);
+	}
+
+	public function ___savePageField(Page $page, Field $field) {
+		// prevent saving of field
+		return true;
+	}
+
+	public function ___deletePageField(Page $page, Field $field) {
+		// deleting of page field not necessary
+		return true;
+	}
+
+	public function ___deleteField(Field $field) {
+		// deleting of field not necessary
+		return true;
+	}
+
+	public function getDatabaseSchema(Field $field) {
+		// no database schema necessary
+		return array();
+	}
+
+	public function ___createField(Field $field) {
+		// nothing necessary to create the field
+		return true;
+	}
+
+	public function getMatchQuery($query, $table, $subfield, $operator, $value) {
+		// we don't allow this field to be queried
+		throw new WireException("Field '{$query->field->name}' is runtime and not queryable");
+	}
+
+	public function ___getCompatibleFieldtypes(Field $field) {
+		// no fieldtypes are compatible
+		return new Fieldtypes();
+	}
+
+	public function getLoadQueryAutojoin(Field $field, DatabaseQuerySelect $query) {
+		// we don't allow this field to be autojoined
+		return null;
+	}
+}
